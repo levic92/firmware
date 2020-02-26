@@ -8,6 +8,8 @@ menu "Cat Tracker sample"
 
 rsource "src/ui/Kconfig"
 
+rsource "src/date_time/Kconfig"
+
 menu "GPS"
 
 choice
@@ -32,8 +34,6 @@ config GPS_USE_EXTERNAL
 endchoice
 
 rsource "src/gps_controller/Kconfig"
-
-rsource "src/nrf9160_timestamp/Kconfig"
 
 config GPS_DEV_NAME
 	string "GPS device name"

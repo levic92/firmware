@@ -16,7 +16,7 @@
 #include <time.h>
 #include <net/socket.h>
 #include <dfu/mcuboot.h>
-#include <nrf9160_timestamp.h>
+#include <date_time.h>
 
 #include <logging/log.h>
 LOG_MODULE_REGISTER(cat_tracker, CONFIG_CAT_TRACKER_LOG_LEVEL);
@@ -147,6 +147,8 @@ static int lte_connect(enum lte_conn_actions action)
 	}
 
 	LOG_INF("Connected to LTE network");
+
+	date_time_update();
 
 	k_sem_give(&cloud_conn_sem);
 
@@ -847,7 +849,7 @@ void main(void)
 		error_handler(err);
 	}
 
-	nrf9160_time_init();
+	date_time_update();
 
 	/*Sleep so that the device manages to adapt
 	  to its new configuration before a GPS search*/
