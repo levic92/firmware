@@ -640,65 +640,41 @@ void cloud_poll(void)
 {
 	int err;
 
-connect:
-
-	k_sem_take(&cloud_conn_sem, K_FOREVER);
-
-	err = cloud_connect(cloud_backend);
-	if (err) {
-		LOG_ERR("cloud_connect failed: %d", err);
-		goto connect;
-	}
-
-	struct pollfd fds[] = { { .fd = cloud_backend->config->socket,
-				  .events = POLLIN } };
+	// /*Sleep so that the device manages to adapt
+	//   to its new configuration before a GPS search*/
+	// k_sleep(K_SECONDS(20));
 
 	while (true) {
-		err = poll(fds, ARRAY_SIZE(fds),
-			   K_SECONDS(CONFIG_MQTT_KEEPALIVE / 3));
-
-		if (err < 0) {
-			LOG_ERR("poll, error: %d", err);
-			error_handler(err);
-			continue;
+		/*Check current device mode*/
+		if (!cloud_data.active) {
+			if (!k_sem_take(&accel_trig_sem, K_FOREVER)) {
+				LOG_INF("The cat is moving!");
+			}
 		}
 
-		if (err == 0) {
-			cloud_ping(cloud_backend);
-			continue;
-		}
+		/*Start GPS search*/
+		gps_control_start(K_NO_WAIT);
 
-		if ((fds[0].revents & POLLIN) == POLLIN) {
-			cloud_input(cloud_backend);
-		}
+		/*Wait for GPS search timeout*/
+		k_sem_take(&gps_timeout_sem, K_SECONDS(cloud_data.gps_timeout));
 
-		if ((fds[0].revents & POLLNVAL) == POLLNVAL) {
-			LOG_ERR("Socket error: POLLNVAL");
-			LOG_ERR("The cloud socket was unexpectedly closed.");
-			break;
-		}
+		/*Stop GPS search*/
+		gps_control_stop(K_NO_WAIT);
 
-		if ((fds[0].revents & POLLHUP) == POLLHUP) {
-			LOG_ERR("Socket error: POLLHUP");
-			LOG_ERR("Connection was closed by the cloud.");
-			error_handler(-EIO);
-			return;
-		}
+		/*Check lte connection*/
+		lte_connect(CHECK_LTE_CONNECTION);
 
-		if ((fds[0].revents & POLLERR) == POLLERR) {
-			LOG_ERR("Socket error: POLLERR");
-			LOG_ERR("Cloud connection was unexpectedly closed.");
-			error_handler(-EIO);
-			return;
-		}
+		/*Send update to cloud if a connection has been established*/
+		cloud_update();
+
+		/*Sleep*/
+		LOG_INF("Going to sleep for: %d seconds", check_active_wait());
+		k_sleep(K_SECONDS(check_active_wait()));
 	}
-
-	cloud_disconnect(cloud_backend);
-	goto connect;
 }
 
 K_THREAD_DEFINE(cloud_poll_thread, CONFIG_CLOUD_POLL_STACKSIZE, cloud_poll,
-		NULL, NULL, NULL, CONFIG_CLOUD_POLL_PRIORITY, 0, K_NO_WAIT);
+		NULL, NULL, NULL, CONFIG_CLOUD_POLL_PRIORITY, 0, K_FOREVER);
 
 static void modem_rsrp_handler(char rsrp_value)
 {
@@ -853,35 +829,66 @@ void main(void)
 
 	nrf9160_time_init();
 
-	/*Sleep so that the device manages to adapt
-	  to its new configuration before a GPS search*/
+	/* Be sure to have time before connection to cloud*/
 	k_sleep(K_SECONDS(20));
 
+	/* Start cat tracker behaviour thread*/
+	k_thread_start(cloud_poll_thread);
+
+connect:
+
+	k_sem_take(&cloud_conn_sem, K_FOREVER);
+
+	err = cloud_connect(cloud_backend);
+	if (err) {
+		LOG_ERR("cloud_connect failed: %d", err);
+		goto connect;
+	}
+
+	struct pollfd fds[] = { { .fd = cloud_backend->config->socket,
+				  .events = POLLIN } };
+
 	while (true) {
-		/*Check current device mode*/
-		if (!cloud_data.active) {
-			if (!k_sem_take(&accel_trig_sem, K_FOREVER)) {
-				LOG_INF("The cat is moving!");
-			}
+		err = poll(fds, ARRAY_SIZE(fds),
+			   K_SECONDS(CONFIG_MQTT_KEEPALIVE / 3));
+
+		if (err < 0) {
+			LOG_ERR("poll, error: %d", err);
+			error_handler(err);
+			continue;
 		}
 
-		/*Start GPS search*/
-		gps_control_start(K_NO_WAIT);
+		if (err == 0) {
+			cloud_ping(cloud_backend);
+			continue;
+		}
 
-		/*Wait for GPS search timeout*/
-		k_sem_take(&gps_timeout_sem, K_SECONDS(cloud_data.gps_timeout));
+		if ((fds[0].revents & POLLIN) == POLLIN) {
+			cloud_input(cloud_backend);
+		}
 
-		/*Stop GPS search*/
-		gps_control_stop(K_NO_WAIT);
+		if ((fds[0].revents & POLLNVAL) == POLLNVAL) {
+			LOG_ERR("Socket error: POLLNVAL");
+			LOG_ERR("The cloud socket was unexpectedly closed.");
+			break;
+		}
 
-		/*Check lte connection*/
-		lte_connect(CHECK_LTE_CONNECTION);
+		if ((fds[0].revents & POLLHUP) == POLLHUP) {
+			LOG_ERR("Socket error: POLLHUP");
+			LOG_ERR("Connection was closed by the cloud.");
+			// should prolly break here.
+			error_handler(-EIO);
+			return;
+		}
 
-		/*Send update to cloud if a connection has been established*/
-		cloud_update();
-
-		/*Sleep*/
-		LOG_INF("Going to sleep for: %d seconds", check_active_wait());
-		k_sleep(K_SECONDS(check_active_wait()));
+		if ((fds[0].revents & POLLERR) == POLLERR) {
+			LOG_ERR("Socket error: POLLERR");
+			LOG_ERR("Cloud connection was unexpectedly closed.");
+			error_handler(-EIO);
+			return;
+		}
 	}
+
+	cloud_disconnect(cloud_backend);
+	goto connect;
 }
